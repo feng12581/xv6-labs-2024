@@ -101,8 +101,18 @@ e1000_transmit(char *buf, int len)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after send completes.
   //
-
-  
+  uint32 tail = regs[E1000_TDT];
+  if((tx_ring[tail].status & E1000_TXD_STAT_DD) == 0) {
+    return -1;
+  }
+  if(tx_bufs[tail] != 0)
+    kfree(tx_bufs[tail]);
+  tx_bufs[tail] = buf;
+  tx_ring[tail].addr = (uint64)tx_bufs[tail];
+  tx_ring[tail].length = len;
+  tx_ring[tail].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  tx_ring[tail].status = 0;
+  regs[E1000_TDT] = tail + 1;
   return 0;
 }
 
@@ -115,7 +125,23 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
-
+  uint32 head = regs[E1000_RDH];
+  uint32 tail = regs[E1000_RDT];
+  tail = (tail + 1) % RX_RING_SIZE;
+  while(tail != head) {
+    if((rx_ring[tail].status & E1000_RXD_STAT_DD)  && !(rx_ring[tail].status & E1000_RXD_STAT_EOP))
+      panic("large packet!\n");
+    if(rx_ring[tail].status & E1000_RXD_STAT_DD) {
+      net_rx(rx_bufs[tail],rx_ring[tail].length);
+      rx_bufs[tail] = kalloc();
+      rx_ring[tail].addr = (uint64)rx_bufs[tail];
+      rx_ring[tail].status = 0;
+      tail = (tail + 1) % RX_RING_SIZE;
+    } else {
+      panic("packet is not ready");
+    }
+  }
+  regs[E1000_RDT] = (tail == 0) ? (RX_RING_SIZE - 1) : (tail - 1);
 }
 
 void
